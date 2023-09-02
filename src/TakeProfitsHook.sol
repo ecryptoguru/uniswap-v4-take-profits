@@ -16,13 +16,14 @@ import {FixedPointMathLib} from "solmate/utils/FixedPointMathLib.sol";
 
 
 contract TakeProfitsHook is BaseHook, ERC1155 {
-    using PoolIdLibrary for IPoolManager.PoolKey; 
+
+    using PoolIdLibrary for IPoolManager.PoolKey;
     using CurrencyLibrary for Currency;
     using FixedPointMathLib for uint256;
 
     // Use the PoolIdLibrary for PoolKey to add the `.toId()` function on a PoolKey
     // which hashes the PoolKey struct into a bytes32 value
-   
+    
 
     // Create a mapping to store the last known tickLower value for a given Pool
     mapping(PoolId poolId => int24 tickLower) public tickLowerLasts;
@@ -41,7 +42,7 @@ contract TakeProfitsHook is BaseHook, ERC1155 {
     mapping(uint256 tokenId => uint256 claimable) public tokenIdClaimable;
     // tokenIdTotalSupply is a mapping that stores how many tokens need to be sold to execute the take-profit order
     mapping(uint256 tokenId => uint256 supply) public tokenIdTotalSupply;
-    // tokenIdData is a mapping that stores the PoolKey, tickLower, and zeroForOne values for a given tokenId
+    // tokenIdData is a mapping that stores the IPoolManager.PoolKey, tickLower, and zeroForOne values for a given tokenId
     mapping(uint256 tokenId => TokenData) public tokenIdData;
 
     struct TokenData {
@@ -50,22 +51,23 @@ contract TakeProfitsHook is BaseHook, ERC1155 {
     bool zeroForOne;
     }
 
-    // Initialize BaseHook and ERC1155 parent contracts in the constructor
-    constructor(IPoolManager _poolManager, string memory _uri) BaseHook(_poolManager) ERC1155(_uri) {}
+   // Initialize BaseHook and ERC1155 parent contracts in the constructor
+   constructor(IPoolManager _poolManager, string memory _uri) BaseHook(_poolManager) ERC1155(_uri) {}
 
-    // Required override function for BaseHook to let the PoolManager know which hooks are implemented
-    function getHooksCalls() public pure override returns (Hooks.Calls memory) {
-        return Hooks.Calls({
-                beforeInitialize: false,
-                afterInitialize: true,
-                beforeModifyPosition: false,
-                afterModifyPosition: false,
-                beforeSwap: false,
-                afterSwap: true,
-                beforeDonate: false,
-                afterDonate: false
-        });
-    }
+   // Required override function for BaseHook to let the PoolManager know which hooks are implemented
+   function getHooksCalls() public pure override returns (Hooks.Calls memory) {
+       return Hooks.Calls({
+               beforeInitialize: false,
+               afterInitialize: true,
+               beforeModifyPosition: false,
+               afterModifyPosition: false,
+               beforeSwap: false,
+               afterSwap: true,
+               beforeDonate: false,
+               afterDonate: false
+       });
+   }
+
 
 // Hooks
 function afterInitialize(
@@ -301,15 +303,9 @@ function _handleSwap(
     }
 
     return delta;
-}
+}   
 
-// ERC-1155 Helpers
-function getTokenId(PoolKey calldata key, int24 tickLower, bool zeroForOne) public pure returns (uint256) {
-    return uint256(keccak256(abi.encodePacked(key.toId(), tickLower, zeroForOne)));
-}
-    
-
-    // Utility Helpers
+// Utility Helpers
 function _setTickLowerLast(PoolId poolId, int24 tickLower) private {
     tickLowerLasts[poolId] = tickLower;
 }

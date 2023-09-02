@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.20;
 
 // Foundry libraries
 import "forge-std/Test.sol";
@@ -31,10 +31,9 @@ import {TakeProfitsStub} from "../src/TakeProfitsStub.sol";
 
 contract TakeProfitsHookTest is Test, GasSnapshot {
 
-}
 
 // Use the libraries
-using PoolIdLibrary for PoolKey;
+using PoolIdLibrary for IPoolManager.PoolKey;
 using CurrencyLibrary for Currency;
 
 // Hardcode the address for our hook instead of deploying it
@@ -66,59 +65,53 @@ PoolId poolId;
 // as we add equal amounts of token0 and token1 to the pool during setUp
 uint160 constant SQRT_RATIO_1_1 = 79228162514264337593543950336;
 
-function _deployERC20Tokens() private {
-    TestERC20 tokenA = new TestERC20(2 ** 128);
-    TestERC20 tokenB = new TestERC20(2 ** 128);
-
-    // Token 0 and Token 1 are assigned in a pool based on
-    // the address of the token
-    if (address(tokenA) < address(tokenB)) {
-        token0 = tokenA;
-        token1 = tokenB;
-    } else {
-        token0 = tokenB;
-        token1 = tokenA;
-    }
+function setUp() public {
+    _deployERC20Tokens();
+    poolManager = new PoolManager(500_000);
+    _stubValidateHookAddress();
+    _initializePool();
+    _addLiquidityToPool();
 }
 
-function _stubValidateHookAddress() private {
-    // Deploy the stub contract
-    TakeProfitsStub stub = new TakeProfitsStub(poolManager, hook);
-    
-    // Fetch all the storage slot writes that have been done at the stub address
-    // during deployment
-    (, bytes32[] memory writes) = vm.accesses(address(stub));
+function test_placeOrder() public {
+    // Place a zeroForOne take-profit order
+    // for 10e18 token0 tokens
+    // at tick 100
 
-    // Etch the code of the stub at the hardcoded hook address
-    vm.etch(address(hook), address(stub).code);
+    int24 tick = 100;
+    uint256 amount = 10 ether;
+    bool zeroForOne = true;
 
-    // Replay the storage slot writes at the hook address
-    unchecked {
-        for (uint256 i = 0; i < writes.length; i++) {
-            bytes32 slot = writes[i];
-            vm.store(address(hook), slot, vm.load(address(stub), slot));
-        }
-    }
+    // Note the original balance of token0 we have
+    uint256 originalBalance = token0.balanceOf(address(this));
+
+    // Place the order
+    token0.approve(address(hook), amount);
+    int24 tickLower = hook.placeOrder(poolKey, tick, amount, zeroForOne);
+
+    // Note the new balance of token0 we have
+    uint256 newBalance = token0.balanceOf(address(this));
+
+    // Since we deployed the pool contract with tick spacing = 60
+    // i.e. the tick can only be a multiple of 60
+    // and initially the tick is 0
+    // the tickLower should be 60 since we placed an order at tick 100
+    assertEq(tickLower, 60);
+
+    // Ensure that our balance was reduced by `amount` tokens
+    assertEq(originalBalance - newBalance, amount);
+
+    // Check the balance of ERC-1155 tokens we received
+    uint256 tokenId = hook.getTokenId(poolKey, tickLower, zeroForOne);
+    uint256 tokenBalance = hook.balanceOf(address(this), tokenId);
+
+    // Ensure that we were, in fact, given ERC-1155 tokens for the order
+    // equal to the `amount` of token0 tokens we placed the order for
+    assertTrue(tokenId != 0);
+    assertEq(tokenBalance, amount);
+
 }
 
-function _initializePool() private {
-    // Deploy the test-versions of modifyPositionRouter and swapRouter
-    modifyPositionRouter = new PoolModifyPositionTest(IPoolManager(address(poolManager)));
-    swapRouter = new PoolSwapTest(IPoolManager(address(poolManager)));
-
-    // Specify the pool key and pool id for the new pool
-    poolKey = IPoolManager.PoolKey({
-        currency0: Currency.wrap(address(token0)),
-        currency1: Currency.wrap(address(token1)),
-        fee: 3000,
-        tickSpacing: 60,
-        hooks: IHooks(hook)
-    });
-    poolId = poolKey.toId();
-    
-    // Initialize the new pool with initial price ratio = 1
-    poolManager.initialize(poolKey, SQRT_RATIO_1_1);
-}
 
 function _addLiquidityToPool() private {
     // Mint a lot of tokens to ourselves
@@ -161,13 +154,60 @@ function _addLiquidityToPool() private {
     token1.approve(address(swapRouter), 100 ether);
 }
 
-function setUp() public {
-    _deployERC20Tokens();
-    poolManager = new PoolManager(500_000);
-    _stubValidateHookAddress();
-    _initializePool();
-    _addLiquidityToPool();
+function _initializePool() private {
+    // Deploy the test-versions of modifyPositionRouter and swapRouter
+    modifyPositionRouter = new PoolModifyPositionTest(IPoolManager(address(poolManager)));
+    swapRouter = new PoolSwapTest(IPoolManager(address(poolManager)));
+
+    // Specify the pool key and pool id for the new pool
+    poolKey = IPoolManager.PoolKey({
+        currency0: Currency.wrap(address(token0)),
+        currency1: Currency.wrap(address(token1)),
+        fee: 3000,
+        tickSpacing: 60,
+        hooks: IHooks(hook)
+    });
+    poolId = poolKey.toId();
+    
+    // Initialize the new pool with initial price ratio = 1
+    poolManager.initialize(poolKey, SQRT_RATIO_1_1);
 }
+
+function _stubValidateHookAddress() private {
+    // Deploy the stub contract
+    TakeProfitsStub stub = new TakeProfitsStub(poolManager, hook);
+    
+    // Fetch all the storage slot writes that have been done at the stub address
+    // during deployment
+    (, bytes32[] memory writes) = vm.accesses(address(stub));
+
+    // Etch the code of the stub at the hardcoded hook address
+    vm.etch(address(hook), address(stub).code);
+
+    // Replay the storage slot writes at the hook address
+    unchecked {
+        for (uint256 i = 0; i < writes.length; i++) {
+            bytes32 slot = writes[i];
+            vm.store(address(hook), slot, vm.load(address(stub), slot));
+        }
+    }
+}
+
+function _deployERC20Tokens() private {
+    TestERC20 tokenA = new TestERC20(2 ** 128);
+    TestERC20 tokenB = new TestERC20(2 ** 128);
+
+    // Token 0 and Token 1 are assigned in a pool based on
+    // the address of the token
+    if (address(tokenA) < address(tokenB)) {
+        token0 = tokenA;
+        token1 = tokenB;
+    } else {
+        token0 = tokenB;
+        token1 = tokenA;
+    }
+}
+
 
 receive() external payable {}
 
@@ -201,41 +241,5 @@ function onERC1155BatchReceived(
         );
 }
 
-function test_placeOrder() public {
-    // Place a zeroForOne take-profit order
-    // for 10e18 token0 tokens
-    // at tick 100
-
-    int24 tick = 100;
-    uint256 amount = 10 ether;
-    bool zeroForOne = true;
-
-    // Note the original balance of token0 we have
-    uint256 originalBalance = token0.balanceOf(address(this));
-
-    // Place the order
-    token0.approve(address(hook), amount);
-    int24 tickLower = hook.placeOrder(poolKey, tick, amount, zeroForOne);
-
-    // Note the new balance of token0 we have
-    uint256 newBalance = token0.balanceOf(address(this));
-
-    // Since we deployed the pool contract with tick spacing = 60
-    // i.e. the tick can only be a multiple of 60
-    // and initially the tick is 0
-    // the tickLower should be 60 since we placed an order at tick 100
-    assertEq(tickLower, 60);
-
-    // Ensure that our balance was reduced by `amount` tokens
-    assertEq(originalBalance - newBalance, amount);
-
-    // Check the balance of ERC-1155 tokens we received
-    uint256 tokenId = hook.getTokenId(poolKey, tickLower, zeroForOne);
-    uint256 tokenBalance = hook.balanceOf(address(this), tokenId);
-
-    // Ensure that we were, in fact, given ERC-1155 tokens for the order
-    // equal to the `amount` of token0 tokens we placed the order for
-    assertTrue(tokenId != 0);
-    assertEq(tokenBalance, amount);
 }
 
